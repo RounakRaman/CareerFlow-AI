@@ -13,7 +13,7 @@ from agents.parser_agent import parse_job_post
 from agents.scoring_agent import score_all_verticals
 from agents.writer_agent import generate_cold_email_and_dm
 from tools.mcp_tools import company_info_lookup, recent_news_lookup, salary_benchmark_tool
-from services.gmail_service import send_email_via_gmail
+from services.gmail_service import send_email_via_smtp
 from services.scheduler_agent import (
     run_reply_detection_job, generate_stale_followup_drafts, run_sent_folder_reconciliation
 )
@@ -93,9 +93,29 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Sidebar Navigation Header
+# Sidebar Navigation & Settings
 st.sidebar.title("⚡ Job Application Agent")
 st.sidebar.caption("LangChain Multi-Agent System | 7 Resume Verticals")
+st.sidebar.markdown("---")
+
+# Gmail Settings Sidebar Section
+st.sidebar.subheader("📧 Gmail SMTP Setup")
+sender_email = st.sidebar.text_input("Your Gmail Address:", value="raman.rounak@gmail.com")
+app_password = st.sidebar.text_input("Gmail App Password:", type="password", help="Generate a 16-character App Password at myaccount.google.com/apppasswords")
+
+if app_password:
+    st.sidebar.success("🟢 Real Gmail SMTP Active")
+else:
+    st.sidebar.warning("🟡 Mock Mode Active (Enter App Password to send real emails)")
+
+with st.sidebar.expander("ℹ️ How to get App Password?"):
+    st.markdown("""
+    1. Go to your **Google Account** > **Security**.
+    2. Ensure **2-Step Verification** is enabled.
+    3. Search for **App Passwords**.
+    4. Create an App Password for 'Mail', copy the 16-letter code and paste it above!
+    """)
+
 st.sidebar.markdown("---")
 
 # Main Navigation Tabs
@@ -256,45 +276,52 @@ Requirements:
             subject_input = st.text_input("Subject Line:", value=chosen_subject)
             editable_email = st.text_area("Email Content (Editable):", value=email_body, height=320)
             
-            st.caption(f"📎 Auto-attached: `{selected_vert_name}_Resume_Rounak_Raman.pdf`")
+            st.caption(f"📎 Auto-attached text resume: `{selected_vert_name}_Resume_Rounak_Raman.txt`")
 
-            send_now = st.button("✉️ Send Cold Email via Gmail API", type="primary", use_container_width=True)
+            send_btn_label = "✉️ Send Real Cold Email via Gmail SMTP" if app_password else "✉️ Send Cold Email (Mock Simulation Mode)"
+            send_now = st.button(send_btn_label, type="primary", use_container_width=True)
 
             if send_now:
                 with st.spinner("Dispatching cold email & logging application..."):
-                    res_send = send_email_via_gmail(
+                    res_send = send_email_via_smtp(
                         recipient_email=parsed_email,
                         subject=subject_input,
                         body=editable_email,
-                        attachment_name=f"{selected_vert_name}_Resume.pdf"
+                        sender_email=sender_email,
+                        app_password=app_password,
+                        attachment_text=selected_res["resume_text"],
+                        attachment_name=f"{selected_vert_name}_Resume_Rounak_Raman.txt"
                     )
                     
-                    app_id = save_application({
-                        "company": parsed_company,
-                        "role_title": parsed_role,
-                        "vertical_used": selected_vert_name,
-                        "recipient_email": parsed_email,
-                        "job_post_raw": job_post_raw,
-                        "ats_score": selected_score_data["ats_score"],
-                        "email_thread_id": res_send["email_thread_id"],
-                        "linkedin_dm_generated": True,
-                        "subject_line_variant": chosen_variant,
-                        "subject_line_text": subject_input,
-                        "status": "sent"
-                    })
-                    
-                    log_scoring(
-                        application_id=app_id,
-                        vertical_id=selected_score_data["vertical_id"],
-                        ats_score=selected_score_data["ats_score"],
-                        kw_pct=selected_score_data["keyword_match_pct"],
-                        req_pct=selected_score_data["requirement_coverage_pct"],
-                        fmt_score=selected_score_data["format_score"],
-                        gap_summary=selected_score_data["gap_summary"]
-                    )
-                    
-                    st.balloons()
-                    st.success(f"🎉 Application Logged (ID: #{app_id})! Email dispatched via {res_send['mode']}.")
+                    if res_send["status"] == "ERROR":
+                        st.error(f"❌ Email Dispatch Failed: {res_send['message']}")
+                    else:
+                        app_id = save_application({
+                            "company": parsed_company,
+                            "role_title": parsed_role,
+                            "vertical_used": selected_vert_name,
+                            "recipient_email": parsed_email,
+                            "job_post_raw": job_post_raw,
+                            "ats_score": selected_score_data["ats_score"],
+                            "email_thread_id": res_send["email_thread_id"],
+                            "linkedin_dm_generated": True,
+                            "subject_line_variant": chosen_variant,
+                            "subject_line_text": subject_input,
+                            "status": "sent"
+                        })
+                        
+                        log_scoring(
+                            application_id=app_id,
+                            vertical_id=selected_score_data["vertical_id"],
+                            ats_score=selected_score_data["ats_score"],
+                            kw_pct=selected_score_data["keyword_match_pct"],
+                            req_pct=selected_score_data["requirement_coverage_pct"],
+                            fmt_score=selected_score_data["format_score"],
+                            gap_summary=selected_score_data["gap_summary"]
+                        )
+                        
+                        st.balloons()
+                        st.success(f"🎉 Application Logged (ID: #{app_id})! {res_send['message']}")
 
         with col_dm:
             st.subheader("LinkedIn DM Pitch")
@@ -427,7 +454,13 @@ with tab_followup:
                 fu_text = st.text_area("Follow-up Body:", value=draft['follow_up_body'], height=180, key=f"fu_{draft['application_id']}")
                 
                 if st.button(f"✉️ Send 1-Click Follow-Up (#{draft['application_id']})", key=f"btn_fu_{draft['application_id']}"):
-                    send_email_via_gmail(draft['recipient_email'], draft['follow_up_subject'], fu_text)
+                    send_email_via_smtp(
+                        recipient_email=draft['recipient_email'],
+                        subject=draft['follow_up_subject'],
+                        body=fu_text,
+                        sender_email=sender_email,
+                        app_password=app_password
+                    )
                     st.success(f"Follow-up sent for application #{draft['application_id']}!")
 
 # ==========================================
