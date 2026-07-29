@@ -12,12 +12,12 @@ def send_email_via_smtp(
     body: str,
     sender_email: str = "raman.rounak@gmail.com",
     app_password: str = "",
-    attachment_text: str = "",
-    attachment_name: str = "Resume_Rounak_Raman.txt"
+    attachment_pdf_path: str = "",
+    attachment_filename: str = ""
 ) -> Dict[str, Any]:
     """
-    Sends email via real Gmail SMTP if app_password is provided.
-    Falls back to mock mode if app_password is empty.
+    Sends email via Gmail SMTP using real binary PDF attachments.
+    If app_password is empty, operates in mock simulation mode.
     """
     with TimedExecution(agent_step="gmail_smtp_send", model_used="gmail-smtp") as timer:
         if not app_password or not app_password.strip():
@@ -31,7 +31,7 @@ def send_email_via_smtp(
                 "recipient": recipient_email or "hiring@company.com",
                 "subject": subject,
                 "email_thread_id": thread_id,
-                "message": "App Password not provided in sidebar settings. Running in Mock Mode."
+                "message": "App Password not provided in sidebar. Dispatched in Mock Mode."
             }
 
         # REAL GMAIL SMTP DISPATCH
@@ -41,13 +41,18 @@ def send_email_via_smtp(
             msg['To'] = recipient_email.strip()
             msg['Subject'] = subject.strip()
 
-            msg.attach(MIMEText(body, 'plain'))
+            msg.attach(MIMEText(body, 'plain', 'utf-8'))
 
-            # Attach resume if text provided
-            if attachment_text:
-                part = MIMEApplication(attachment_text.encode('utf-8'), Name=attachment_name)
-                part['Content-Disposition'] = f'attachment; filename="{attachment_name}"'
+            # Attach real binary PDF file if provided
+            if attachment_pdf_path and os.path.exists(attachment_pdf_path):
+                filename = attachment_filename or os.path.basename(attachment_pdf_path)
+                with open(attachment_pdf_path, 'rb') as f:
+                    pdf_bytes = f.read()
+                
+                part = MIMEApplication(pdf_bytes, _subtype="pdf")
+                part.add_header('Content-Disposition', 'attachment', filename=filename)
                 msg.attach(part)
+                print(f"[SMTP Service] Attached binary PDF file: {filename} ({len(pdf_bytes)} bytes)")
 
             # Connect to Gmail SMTP Server (Port 587 TLS)
             server = smtplib.SMTP('smtp.gmail.com', 587)
@@ -66,7 +71,7 @@ def send_email_via_smtp(
                 "recipient": recipient_email,
                 "subject": subject,
                 "email_thread_id": thread_id,
-                "message": f"Real email successfully dispatched to {recipient_email} via Gmail SMTP!"
+                "message": f"Real email successfully sent to {recipient_email} via Gmail SMTP with PDF attachment!"
             }
         except Exception as e:
             timer.tokens_used = 20
