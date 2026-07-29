@@ -29,7 +29,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Initialize Database & Ensure Backend PDFs exist
+# Initialize Database & Backend Resume Folder
 init_db()
 generate_all_resumes()
 
@@ -129,7 +129,7 @@ tab_studio, tab_dashboard, tab_followup, tab_observability, tab_resumes = st.tab
     "📊 History & Analytics",
     "⏰ Follow-Up & Replies",
     "🖥️ Agent Observability",
-    "📄 Resume Verticals"
+    "📄 Resume Verticals & PDF Manager"
 ])
 
 # ==========================================
@@ -258,7 +258,7 @@ Requirements:
                 """, unsafe_allow_html=True)
 
         st.markdown("---")
-        st.markdown("### 📎 Resume Attachment & Cold Email Pitch Studio")
+        st.markdown("### 📎 Backend Resume Attachment & Cold Pitch Studio")
 
         # Original Backend Resume Selection Dropdown (Irrespective of ATS score)
         all_resumes = get_all_resumes()
@@ -268,19 +268,22 @@ Requirements:
 
         with col_res_select:
             selected_vert_name = st.selectbox(
-                "📁 Choose Backend Resume to Attach (Irrespective of ATS Score):",
+                "📁 Choose Original Resume PDF (Irrespective of ATS Score):",
                 options=vertical_names,
                 index=vertical_names.index(st.session_state.get("selected_vertical", vertical_names[0])),
-                help="Select any of your 7 original backend resumes to attach to the email."
+                help="Select any of your 7 original backend resume PDF files to attach."
             )
             st.session_state["selected_vertical"] = selected_vert_name
 
-            # Compute PDF File Path
+            # Compute PDF File Path in Backend
             clean_vname = selected_vert_name.replace("/", "_").replace(" ", "_")
             pdf_filename = f"{clean_vname}_Resume_Rounak_Raman.pdf"
             pdf_path = os.path.join(RESUMES_DIR, pdf_filename)
             
-            st.caption(f"📄 **Attached PDF File**: `{pdf_filename}` (Original binary PDF)")
+            if os.path.exists(pdf_path):
+                st.caption(f"✅ **Backend PDF Attached**: `{pdf_filename}` ({os.path.getsize(pdf_path)} bytes)")
+            else:
+                st.caption(f"⚠️ PDF file `{pdf_filename}` missing in `resumes/` folder.")
 
         with col_ab_select:
             ab_choice = st.radio(
@@ -306,8 +309,7 @@ Requirements:
             send_now = st.button(send_btn_label, type="primary", use_container_width=True)
 
             if send_now:
-                with st.spinner(f"Sending email with attached {pdf_filename}..."):
-                    # Use the EXACT user edited subject and body from session_state!
+                with st.spinner(f"Sending email with attached original PDF {pdf_filename}..."):
                     user_edited_body = st.session_state["user_email_body"]
                     user_edited_subject = st.session_state["user_subject_line"]
 
@@ -545,26 +547,53 @@ with tab_observability:
         st.dataframe(df_logs[["id", "timestamp", "agent_step", "model_used", "tokens_used", "latency_ms", "details"]], use_container_width=True, hide_index=True)
 
 # ==========================================
-# TAB 5: VERTICAL RESUMES MANAGER
+# TAB 5: VERTICAL RESUMES & PDF MANAGER
 # ==========================================
 with tab_resumes:
-    st.header("📄 Vertical Resumes Corpus Manager")
-    st.caption("View, inspect, and update plain-text resumes for all 7 vertical tracks used for RAG ATS scoring.")
+    st.header("📄 Vertical Resumes & Original PDF Manager")
+    st.caption("Inspect plain-text RAG corpus OR upload your real original PDF resumes directly into the backend.")
 
     resumes = get_all_resumes()
     res_names = [r["vertical_name"] for r in resumes]
     
-    selected_mgr_vert = st.selectbox("Select Vertical Resume to Inspect/Edit:", options=res_names)
+    selected_mgr_vert = st.selectbox("Select Vertical Resume to Manage:", options=res_names)
     target_res = next(r for r in resumes if r["vertical_name"] == selected_mgr_vert)
 
+    clean_vname = selected_mgr_vert.replace("/", "_").replace(" ", "_")
+    target_pdf_filename = f"{clean_vname}_Resume_Rounak_Raman.pdf"
+    target_pdf_path = os.path.join(RESUMES_DIR, target_pdf_filename)
+
+    st.markdown("---")
+    st.subheader("1. Backend PDF Attachment Manager")
+    
+    if os.path.exists(target_pdf_path):
+        st.success(f"🟢 **Backend PDF Active**: `{target_pdf_filename}` (Location: `resumes/{target_pdf_filename}`) — {os.path.getsize(target_pdf_path)} bytes")
+    else:
+        st.warning(f"⚠️ PDF file `resumes/{target_pdf_filename}` missing.")
+
+    # Upload your OWN real PDF file directly in the app!
+    uploaded_pdf = st.file_uploader(
+        f"📤 Upload Your Real Original PDF Resume for '{selected_mgr_vert}':",
+        type=["pdf"],
+        help="Upload your real PDF resume file from your computer. It will replace the backend PDF attached to emails for this track!"
+    )
+
+    if uploaded_pdf is not None:
+        with open(target_pdf_path, "wb") as f:
+            f.write(uploaded_pdf.getbuffer())
+        st.success(f"🎉 Successfully saved your real PDF resume to `resumes/{target_pdf_filename}`! Emails sent with this track will now attach your exact uploaded PDF!")
+        st.experimental_rerun()
+
+    st.markdown("---")
+    st.subheader("2. Plain-Text Resume (Used for RAG ATS Keyword Scoring)")
     st.write(f"**Last Updated:** {target_res['last_updated']}")
     
     updated_resume_text = st.text_area(
-        f"Resume Plain Text ({selected_mgr_vert}):",
+        f"RAG Corpus Text ({selected_mgr_vert}):",
         value=target_res["resume_text"],
-        height=400
+        height=320
     )
 
-    if st.button("💾 Save Resume Updates", type="primary"):
+    if st.button("💾 Save Text Resume Updates", type="primary"):
         update_resume(selected_mgr_vert, updated_resume_text)
-        st.success(f"Updated resume text for {selected_mgr_vert} successfully!")
+        st.success(f"Updated RAG text corpus for {selected_mgr_vert} successfully!")
