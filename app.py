@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import json
+import os
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
@@ -18,6 +19,7 @@ from services.scheduler_agent import (
     run_reply_detection_job, generate_stale_followup_drafts, run_sent_folder_reconciliation
 )
 from utils.observability import get_observability_logs
+from create_resume_pdfs import generate_all_resumes
 
 # Page Config
 st.set_page_config(
@@ -27,8 +29,11 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Initialize Database
+# Initialize Database & Ensure Backend PDFs exist
 init_db()
+generate_all_resumes()
+
+RESUMES_DIR = os.path.join(os.path.dirname(__file__), "resumes")
 
 # Custom Styling (Dark Terminal + Modern Clean UI)
 st.markdown("""
@@ -153,7 +158,7 @@ Requirements:
         job_post_raw = st.text_area(
             "Paste Job Post Content:",
             value=sample_jd,
-            height=200,
+            height=180,
             help="Paste raw JD, LinkedIn post text, or recruitment email."
         )
 
@@ -163,8 +168,8 @@ Requirements:
         clear_btn = st.button("🔄 Reset Studio", use_container_width=True)
 
     if clear_btn:
-        st.session_state.pop("parsed_jd", None)
-        st.session_state.pop("scores", None)
+        for k in ["parsed_jd", "scores", "user_email_body", "user_subject_line", "user_linkedin_dm", "selected_vertical"]:
+            st.session_state.pop(k, None)
         st.experimental_rerun()
 
     if analyze_btn or "parsed_jd" in st.session_state:
@@ -173,9 +178,30 @@ Requirements:
                 parsed = parse_job_post(job_post_raw)
                 scores = score_all_verticals(parsed["requirements"], job_post_raw)
                 
+                top_vert_name = scores[0]["vertical_name"]
+                
+                # Fetch initial generated draft
+                all_res = get_all_resumes()
+                selected_res = next(r for r in all_res if r["vertical_name"] == top_vert_name)
+                
+                subjects, initial_email_body, initial_linkedin_dm = generate_cold_email_and_dm(
+                    company=parsed["company"],
+                    role_title=parsed["role_title"],
+                    vertical_name=top_vert_name,
+                    resume_text=selected_res["resume_text"],
+                    requirements=parsed["requirements"],
+                    recipient_email=parsed["recipient_email"]
+                )
+                
                 st.session_state["parsed_jd"] = parsed
                 st.session_state["scores"] = scores
-                st.session_state["selected_vertical"] = scores[0]["vertical_name"]
+                st.session_state["selected_vertical"] = top_vert_name
+                
+                # Persist draft state so user edits never get reset!
+                st.session_state["user_email_body"] = initial_email_body
+                st.session_state["user_subject_line"] = subjects["variant_a"]
+                st.session_state["subjects"] = subjects
+                st.session_state["user_linkedin_dm"] = initial_linkedin_dm
 
         parsed = st.session_state["parsed_jd"]
         scores = st.session_state["scores"]
@@ -231,66 +257,68 @@ Requirements:
                 </div>
                 """, unsafe_allow_html=True)
 
-        # 1-Click Vertical Selector
+        st.markdown("---")
+        st.markdown("### 📎 Resume Attachment & Cold Email Pitch Studio")
+
+        # Original Backend Resume Selection Dropdown (Irrespective of ATS score)
+        all_resumes = get_all_resumes()
         vertical_names = [s["vertical_name"] for s in scores]
-        selected_vert_name = st.selectbox(
-            "Select Resume Vertical for Cold Pitch:",
-            options=vertical_names,
-            index=vertical_names.index(st.session_state.get("selected_vertical", vertical_names[0]))
-        )
-        st.session_state["selected_vertical"] = selected_vert_name
+        
+        col_res_select, col_ab_select = st.columns([1, 1])
+
+        with col_res_select:
+            selected_vert_name = st.selectbox(
+                "📁 Choose Backend Resume to Attach (Irrespective of ATS Score):",
+                options=vertical_names,
+                index=vertical_names.index(st.session_state.get("selected_vertical", vertical_names[0])),
+                help="Select any of your 7 original backend resumes to attach to the email."
+            )
+            st.session_state["selected_vertical"] = selected_vert_name
+
+            # Compute PDF File Path
+            clean_vname = selected_vert_name.replace("/", "_").replace(" ", "_")
+            pdf_filename = f"{clean_vname}_Resume_Rounak_Raman.pdf"
+            pdf_path = os.path.join(RESUMES_DIR, pdf_filename)
+            
+            st.caption(f"📄 **Attached PDF File**: `{pdf_filename}` (Original binary PDF)")
+
+        with col_ab_select:
+            ab_choice = st.radio(
+                "A/B Subject Line Pattern:",
+                options=["Variant A (Direct Value)", "Variant B (Curiosity Hook)"],
+                horizontal=True
+            )
+            chosen_variant = "A" if "Variant A" in ab_choice else "B"
 
         selected_score_data = next(s for s in scores if s["vertical_name"] == selected_vert_name)
         st.info(f"**Score Breakdown ({selected_vert_name})**: {selected_score_data['gap_summary']}")
 
-        # Fetch Resumes & MCP Context
-        all_res = get_all_resumes()
-        selected_res = next(r for r in all_res if r["vertical_name"] == selected_vert_name)
-
-        subjects, email_body, linkedin_dm = generate_cold_email_and_dm(
-            company=parsed_company,
-            role_title=parsed_role,
-            vertical_name=selected_vert_name,
-            resume_text=selected_res["resume_text"],
-            requirements=parsed["requirements"],
-            recipient_email=parsed_email
-        )
-
-        st.markdown("---")
-        st.markdown("### ✉️ Email & Pitch Studio")
-
         col_email, col_dm = st.columns([3, 2])
 
         with col_email:
-            st.subheader("Cold Email Preview")
+            st.subheader("Cold Email Preview (Edits are 100% Saved & Persisted)")
             
-            ab_choice = st.radio(
-                "A/B Subject Line Variant:",
-                options=["Variant A (Direct Value)", "Variant B (Curiosity Hook)"],
-                horizontal=True
-            )
+            # Text inputs bound to session state so user edits never reset!
+            current_subject = st.text_input("Subject Line:", key="user_subject_line")
+            current_email_body = st.text_area("Email Content (Editable):", key="user_email_body", height=320)
             
-            chosen_variant = "A" if "Variant A" in ab_choice else "B"
-            chosen_subject = subjects["variant_a"] if chosen_variant == "A" else subjects["variant_b"]
-            
-            subject_input = st.text_input("Subject Line:", value=chosen_subject)
-            editable_email = st.text_area("Email Content (Editable):", value=email_body, height=320)
-            
-            st.caption(f"📎 Auto-attached text resume: `{selected_vert_name}_Resume_Rounak_Raman.txt`")
-
             send_btn_label = "✉️ Send Real Cold Email via Gmail SMTP" if app_password else "✉️ Send Cold Email (Mock Simulation Mode)"
             send_now = st.button(send_btn_label, type="primary", use_container_width=True)
 
             if send_now:
-                with st.spinner("Dispatching cold email & logging application..."):
+                with st.spinner(f"Sending email with attached {pdf_filename}..."):
+                    # Use the EXACT user edited subject and body from session_state!
+                    user_edited_body = st.session_state["user_email_body"]
+                    user_edited_subject = st.session_state["user_subject_line"]
+
                     res_send = send_email_via_smtp(
                         recipient_email=parsed_email,
-                        subject=subject_input,
-                        body=editable_email,
+                        subject=user_edited_subject,
+                        body=user_edited_body,
                         sender_email=sender_email,
                         app_password=app_password,
-                        attachment_text=selected_res["resume_text"],
-                        attachment_name=f"{selected_vert_name}_Resume_Rounak_Raman.txt"
+                        attachment_pdf_path=pdf_path,
+                        attachment_filename=pdf_filename
                     )
                     
                     if res_send["status"] == "ERROR":
@@ -306,7 +334,7 @@ Requirements:
                             "email_thread_id": res_send["email_thread_id"],
                             "linkedin_dm_generated": True,
                             "subject_line_variant": chosen_variant,
-                            "subject_line_text": subject_input,
+                            "subject_line_text": user_edited_subject,
                             "status": "sent"
                         })
                         
@@ -327,9 +355,9 @@ Requirements:
             st.subheader("LinkedIn DM Pitch")
             st.caption("🔒 **Compliance Note**: LinkedIn ToS prohibits automated sending. Use manual copy-paste below.")
             
-            st.text_area("LinkedIn Message (<150 words):", value=linkedin_dm, height=260, key="dm_area")
+            st.text_area("LinkedIn Message (<150 words):", key="user_linkedin_dm", height=260)
             
-            st.code(linkedin_dm, language="text")
+            st.code(st.session_state.get("user_linkedin_dm", ""), language="text")
             st.info("💡 Highlight and copy the snippet above for your manual LinkedIn message outreach.")
 
 # ==========================================
@@ -344,7 +372,6 @@ with tab_dashboard:
     if not apps:
         st.info("No applications logged yet. Use the Cold Email Studio to process your first application!")
     else:
-        # High level metrics
         total_apps = len(apps)
         replied_count = sum(1 for a in apps if a["status"] == "replied")
         reply_rate = round((replied_count / max(total_apps, 1)) * 100, 1)

@@ -4,21 +4,24 @@ from database import RESUME_SEED_DATA
 RESUMES_DIR = os.path.join(os.path.dirname(__file__), "resumes")
 os.makedirs(RESUMES_DIR, exist_ok=True)
 
-def generate_pdf_native(filename, title_str, text_content):
-    """Generates a valid, native PDF 1.4 file directly in Python with zero dependencies."""
+def generate_clean_pdf(filename, title_str, text_content):
+    """Generates a valid, binary PDF 1.4 file formatted nicely for PDF viewers."""
     lines = text_content.strip().split('\n')
     
-    # Escape parentheses and backslashes for PDF text stream
-    pdf_text_cmds = ["BT", "/F1 9 Tf", "12 TL", "36 756 Td"]
+    pdf_text_cmds = [
+        "BT",
+        "/F1 9 Tf",
+        "13 TL",
+        "36 756 Td"
+    ]
     
     for line in lines:
         clean = line.strip().replace('\\', '\\\\').replace('(', '\\(').replace(')', '\\)')
         if not clean:
             pdf_text_cmds.append("T*")
         else:
-            # Handle long lines truncation for simple page layout
-            if len(clean) > 110:
-                clean = clean[:107] + "..."
+            if len(clean) > 105:
+                clean = clean[:102] + "..."
             pdf_text_cmds.append(f"({clean}) Tj T*")
             
     pdf_text_cmds.append("ET")
@@ -66,7 +69,7 @@ def generate_all_resumes():
     for seed in RESUME_SEED_DATA:
         v_name = seed["vertical_name"].replace("/", "_").replace(" ", "_")
         pdf_path = os.path.join(RESUMES_DIR, f"{v_name}_Resume_Rounak_Raman.pdf")
-        generate_pdf_native(pdf_path, seed["vertical_name"], seed["resume_text"])
+        generate_clean_pdf(pdf_path, seed["vertical_name"], seed["resume_text"])
 
 if __name__ == "__main__":
     generate_all_resumes()
