@@ -5,24 +5,35 @@ RESUMES_DIR = os.path.join(os.path.dirname(__file__), "resumes")
 os.makedirs(RESUMES_DIR, exist_ok=True)
 
 def generate_clean_pdf(filename, title_str, text_content):
-    """Generates a valid, binary PDF 1.4 file formatted nicely for PDF viewers."""
-    lines = text_content.strip().split('\n')
+    """Generates a clean PDF file with proper bullet points and NO line truncation."""
+    # Replace unicode bullet points with standard bullet dash so it doesn't render as '?'
+    clean_text = text_content.replace('•', '-').replace('\u2022', '-')
+    lines = clean_text.strip().split('\n')
     
     pdf_text_cmds = [
         "BT",
         "/F1 9 Tf",
-        "13 TL",
+        "12 TL",
         "36 756 Td"
     ]
     
     for line in lines:
-        clean = line.strip().replace('\\', '\\\\').replace('(', '\\(').replace(')', '\\)')
-        if not clean:
+        l_str = line.strip().replace('\\', '\\\\').replace('(', '\\(').replace(')', '\\)')
+        if not l_str:
             pdf_text_cmds.append("T*")
         else:
-            if len(clean) > 105:
-                clean = clean[:102] + "..."
-            pdf_text_cmds.append(f"({clean}) Tj T*")
+            # Wrap long lines across multiple PDF lines without truncating with '...'
+            max_len = 100
+            while len(l_str) > max_len:
+                # Find space near max_len
+                space_idx = l_str.rfind(' ', 0, max_len)
+                if space_idx == -1:
+                    space_idx = max_len
+                chunk = l_str[:space_idx]
+                pdf_text_cmds.append(f"({chunk}) Tj T*")
+                l_str = l_str[space_idx:].strip()
+            if l_str:
+                pdf_text_cmds.append(f"({l_str}) Tj T*")
             
     pdf_text_cmds.append("ET")
     stream_data = "\n".join(pdf_text_cmds).encode('latin1', 'replace')
@@ -69,7 +80,9 @@ def generate_all_resumes():
     for seed in RESUME_SEED_DATA:
         v_name = seed["vertical_name"].replace("/", "_").replace(" ", "_")
         pdf_path = os.path.join(RESUMES_DIR, f"{v_name}_Resume_Rounak_Raman.pdf")
-        generate_clean_pdf(pdf_path, seed["vertical_name"], seed["resume_text"])
+        # ONLY create if file does NOT already exist, so user's uploaded real PDFs are NEVER overwritten!
+        if not os.path.exists(pdf_path):
+            generate_clean_pdf(pdf_path, seed["vertical_name"], seed["resume_text"])
 
 if __name__ == "__main__":
     generate_all_resumes()
